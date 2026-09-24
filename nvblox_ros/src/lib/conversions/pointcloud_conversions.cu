@@ -170,9 +170,10 @@ void PointcloudConverter::depthImageFromPointcloudGPU(
   const int num_bytes_between_points = pointcloud->point_step;
   const int num_points = pointcloud->width * pointcloud->height;
 
-  // Expand buffers where required
-  if (static_cast<size_t>(lidar.numel()) > lidar_pointcloud_host_.capacity()) {
-    const int new_size = static_cast<int>(lidar.numel());
+  // Expand buffers where required. The cloud need not be organized to the
+  // LiDAR model: unorganized sensors (e.g. Livox) send any number of points.
+  if (static_cast<size_t>(num_points) > lidar_pointcloud_host_.capacity()) {
+    const int new_size = num_points;
     lidar_pointcloud_host_.reserveAsync(new_size, *cuda_stream_);
     lidar_pointcloud_device_.reserveAsync(new_size, *cuda_stream_);
     cuda_stream_->synchronize();
@@ -189,11 +190,14 @@ void PointcloudConverter::depthImageFromPointcloudGPU(
 
   // Convert to an image on the GPU
   constexpr int num_threads_per_block = 256;  // because why not
-  const int num_thread_blocks = lidar.numel() / num_threads_per_block + 1;
+  // One thread per copied point. Sizing this by lidar.numel() dropped the
+  // points beyond it, or read past the copied ones (stale or unset memory).
+  const int num_copied_points = lidar_pointcloud_host_.size();
+  const int num_thread_blocks = num_copied_points / num_threads_per_block + 1;
   depthImageFromPointcloudKernel<<<num_thread_blocks, num_threads_per_block, 0,
                                    *cuda_stream_>>>(
       lidar_pointcloud_device_.data(), lidar, num_bytes_between_points,
-      lidar.numel(), depth_image_ptr->dataPtr());
+      num_copied_points, depth_image_ptr->dataPtr());
   checkCudaErrors(cudaStreamSynchronize(*cuda_stream_));
   checkCudaErrors(cudaPeekAtLastError());
 }
