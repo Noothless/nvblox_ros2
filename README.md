@@ -1,3 +1,5 @@
+> **Project fork of [ethz-mrl/nvblox_ros2](https://github.com/ethz-mrl/nvblox_ros2) for [agentic-humanoid](https://github.com/ethz-mrl/agentic-humanoid).** The `agentic-humanoid` branch is the lab `main` plus the project's patches. See [docs/pages/packages/nvblox_ros2.rst](https://github.com/ethz-mrl/agentic-humanoid/blob/main/docs/pages/packages/nvblox_ros2.rst) for the patch list, their upstream status and the rebase procedure.
+
 # Isaac ROS Nvblox
 
 Nvblox ROS 2 integration for local 3D scene reconstruction and mapping.
