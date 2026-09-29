@@ -53,6 +53,22 @@ public:
     const rclcpp::Time & timestamp,
     Transform * transform);
 
+  /// @brief Looks up the pose of source_frame in target_frame on the TF tree (agentic-humanoid
+  ///        fork, for the body filter). Needs use_tf_transforms.
+  /// @param target_frame The frame the pose is expressed in.
+  /// @param source_frame The frame whose pose is returned.
+  /// @param timestamp Time of the transform.
+  /// @param transform The output transform, T_target_source.
+  /// @return true if the lookup was successful.
+  bool lookupTransform(
+    const std::string & target_frame,
+    const std::string & source_frame,
+    const rclcpp::Time & timestamp,
+    Transform * transform);
+
+  /// Whether transforms come from the TF tree.
+  bool use_tf_transforms() const {return use_tf_transforms_;}
+
   /// Assumes these transforms are from GLOBAL frame to POSE frame. Ignores
   /// frame_id.
   void transformCallback(

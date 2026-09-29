@@ -82,6 +82,18 @@ bool Transformer::lookupTransformToGlobalFrame(
   return false;
 }
 
+bool Transformer::lookupTransform(
+  const std::string & target_frame,
+  const std::string & source_frame,
+  const rclcpp::Time & timestamp,
+  Transform * transform)
+{
+  if (!use_tf_transforms_) {
+    return false;
+  }
+  return lookupTransformTf(target_frame, source_frame, timestamp, transform);
+}
+
 void Transformer::transformCallback(
   const geometry_msgs::msg::TransformStamped::ConstSharedPtr transform_msg)
 {

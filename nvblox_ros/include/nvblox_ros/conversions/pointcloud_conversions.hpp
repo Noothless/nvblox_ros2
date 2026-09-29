@@ -28,6 +28,8 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 
+#include "nvblox_ros/body_filter.hpp"
+
 namespace nvblox
 {
 namespace conversions
@@ -61,9 +63,13 @@ public:
     sensor_msgs::msg::PointCloud2 * pointcloud_msg);
 
   // Convert pointcloud to depth image.
-  void depthImageFromPointcloudGPU(
+  // agentic-humanoid fork: points inside any of body_capsules (in the cloud's
+  // frame) are dropped, so their pixels stay invalid (0) unless another point
+  // lands there. Returns the number of points dropped that way.
+  int depthImageFromPointcloudGPU(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & pointcloud,
-    const Lidar & lidar, DepthImage * depth_image_ptr);
+    const Lidar & lidar, DepthImage * depth_image_ptr,
+    const CapsuleSet * body_capsules = nullptr);
 
   // This function returns true if the pointcloud passed in is consistent with
   // the LiDAR intrinsics model.
@@ -98,6 +104,8 @@ private:
   host_vector<Vector3f> lidar_pointcloud_host_;
   device_vector<Vector3f> lidar_pointcloud_device_;
   device_vector<PclPointXYZI> pcl_pointcloud_device_;
+  unified_ptr<int> num_body_points_device_;
+  unified_ptr<int> num_body_points_host_;
 };
 
 }  // namespace conversions

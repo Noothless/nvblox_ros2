@@ -167,6 +167,38 @@ void initializeNvbloxNodeParams(
   initParam<float>(node, &params->clear_map_outside_radius_rate_hz, parameter_tree);
   initParam<float>(node, &params->map_clearing_radius_m, parameter_tree);
   initParam<float>(node, &params->esdf_and_gradients_unobserved_value, parameter_tree);
+  initParam<bool>(node, &params->body_filter_enable, parameter_tree);
+  initParam<float>(node, &params->body_filter_tf_timeout_s, parameter_tree);
+  initParam<float>(node, &params->body_filter_margin_m, parameter_tree);
+}
+
+std::vector<BodyCapsule> initializeBodyCapsuleParams(rclcpp::Node * node)
+{
+  const std::string prefix = "body_filter.capsules.";
+  const auto names = node->declare_parameter<std::vector<std::string>>(
+    prefix + "names", std::vector<std::string>{});
+  auto offset = [&](const std::string & name) -> Vector3f {
+      const auto xyz =
+        node->declare_parameter<std::vector<double>>(name, std::vector<double>{0.0, 0.0, 0.0});
+      CHECK_EQ(xyz.size(), 3u) << name << " must be [x, y, z]";
+      return Vector3f(xyz[0], xyz[1], xyz[2]);
+    };
+  std::vector<BodyCapsule> capsules;
+  for (const std::string & name : names) {
+    const std::string capsule = prefix + name + ".";
+    BodyCapsule body_capsule;
+    body_capsule.name = name;
+    body_capsule.start.link = node->declare_parameter<std::string>(capsule + "start_link", "");
+    body_capsule.start.offset = offset(capsule + "start_offset");
+    body_capsule.end.link = node->declare_parameter<std::string>(capsule + "end_link", "");
+    body_capsule.end.offset = offset(capsule + "end_offset");
+    body_capsule.radius = node->declare_parameter<double>(capsule + "radius", 0.0);
+    CHECK(!body_capsule.start.link.empty() && !body_capsule.end.link.empty())
+      << "Body capsule " << name << " needs start_link and end_link";
+    CHECK_GT(body_capsule.radius, 0.0f) << "Body capsule " << name << " needs a radius";
+    capsules.push_back(body_capsule);
+  }
+  return capsules;
 }
 
 void initializeFuserNodeParams(

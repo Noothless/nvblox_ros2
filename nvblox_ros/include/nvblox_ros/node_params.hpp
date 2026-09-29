@@ -18,8 +18,11 @@
 #ifndef NVBLOX_ROS__NODE_PARAMS_HPP_
 #define NVBLOX_ROS__NODE_PARAMS_HPP_
 
+#include <vector>
+
 #include "nvblox/utils/params.h"
 #include "nvblox/mapper/multi_mapper.h"
+#include "nvblox_ros/body_filter.hpp"
 #include "nvblox_ros/dataset_types.hpp"
 
 #include <rclcpp/rclcpp.hpp>
@@ -265,6 +268,21 @@ constexpr Param<bool>::Description kPrintQueueDropsToConsoleParamDesc{
 constexpr Param<float>::Description kEsdfAndGradientsUnobservedValueParamDesc{
   "esdf_and_gradients_unobserved_value", -1000.F,
   "This value will be used for for unobserved voxels in the dense output grid."};
+// ======= BODY FILTER PARAMS (agentic-humanoid fork) =======
+constexpr Param<bool>::Description kBodyFilterEnableParamDesc{
+  "body_filter.enable", false,
+  "Whether to drop the robot's own body, the capsules in body_filter.capsules, from depth images "
+  "and LiDAR scans before integration."};
+
+constexpr Param<float>::Description kBodyFilterTfTimeoutSParamDesc{
+  "body_filter.tf_timeout_s", 0.5F,
+  "How long a depth image or scan waits for the body links' TF at its stamp. After that it is "
+  "dropped, never integrated unfiltered."};
+
+constexpr Param<float>::Description kBodyFilterMarginMParamDesc{
+  "body_filter.margin_m", 0.0F,
+  "Added to every capsule radius, for TF latency and moving limbs."};
+
 constexpr Param<bool>::Description kOutputPessimisticDistanceMap{
   "output_pessimistic_distance_map", true,
   "Whether or not to output the pessimistic distance map."};
@@ -380,6 +398,10 @@ public:
   Param<float> clear_map_outside_radius_rate_hz{kClearMapOutsideRadiusRateHzParamDesc};
   Param<float> esdf_and_gradients_unobserved_value{kEsdfAndGradientsUnobservedValueParamDesc};
   Param<float> map_clearing_radius_m{kMapClearingRadiusMParamDesc};
+
+  Param<bool> body_filter_enable{kBodyFilterEnableParamDesc};
+  Param<float> body_filter_tf_timeout_s{kBodyFilterTfTimeoutSParamDesc};
+  Param<float> body_filter_margin_m{kBodyFilterMarginMParamDesc};
 };
 
 /// Container for all node params of the fuser node.
@@ -413,6 +435,12 @@ void initializeBaseNodeParams(
 void initializeNvbloxNodeParams(
   rclcpp::Node * node, NvbloxNodeParams * params,
   std::optional<nvblox::parameters::ParameterTreeNode *> parameter_tree = std::nullopt);
+
+/// Register the body filter's capsules with ROS and read them (agentic-humanoid fork):
+/// body_filter.capsules.names lists the capsules, and for each <name>,
+/// body_filter.capsules.<name>.{start_link, start_offset, end_link, end_offset, radius}
+/// give its ends (a link and an [x, y, z] offset in the link's axes, in m) and its radius in m.
+std::vector<BodyCapsule> initializeBodyCapsuleParams(rclcpp::Node * node);
 
 /// Register all fuser node parameters with ROS and initialize them if set from ROS.
 void initializeFuserNodeParams(

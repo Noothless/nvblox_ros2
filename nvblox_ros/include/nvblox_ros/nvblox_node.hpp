@@ -51,6 +51,7 @@
 #include <nvblox_msgs/srv/file_path.hpp>
 #include <nvblox_msgs/srv/esdf_and_gradients.hpp>
 
+#include "nvblox_ros/body_filter.hpp"
 #include "nvblox_ros/layer_publishing.hpp"
 #include "nvblox_ros/conversions/image_conversions.hpp"
 #include "nvblox_ros/conversions/mesh_conversions.hpp"
@@ -224,6 +225,18 @@ protected:
 
   // Map clearing
   void clearMapOutsideOfRadiusOfLastKnownPose();
+
+  // Body filter (agentic-humanoid fork).
+  void initializeBodyFilter(const std::vector<BodyCapsule> & body_capsules);
+  /// True if the body filter is off, has the body links' TF for this sensor frame and stamp, or
+  /// has waited for it longer than body_filter.tf_timeout_s (the message is then dropped).
+  bool isBodyTfReady(const std::string & sensor_frame, const rclcpp::Time & timestamp);
+  /// Looks up the body links in the sensor frame at the stamp into body_link_poses_.
+  bool lookupBodyLinks(const std::string & sensor_frame, const rclcpp::Time & timestamp);
+  /// Places the body capsules in the sensor frame at the stamp. False if TF is missing.
+  bool placeBodyCapsules(const std::string & sensor_frame, const rclcpp::Time & timestamp);
+  void publishBodyMask(const std::string & frame_id, const rclcpp::Time & timestamp);
+  void logBodyFilterStatistics();
 
   /// Used by callbacks (internally) to add input items to queues.
   /// @tparam QueuedType The type of the input item stored by the queue.
@@ -409,6 +422,7 @@ protected:
     tsdf_zero_crossings_ground_plane_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
     tsdf_zero_crossings_pointcloud_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr body_mask_publisher_;
 
   // Services.
   rclcpp::Service<nvblox_msgs::srv::FilePath>::SharedPtr save_ply_service_;
@@ -480,6 +494,35 @@ protected:
 
   // Object for back projecting image to a pointcloud.
   DepthImageBackProjector image_back_projector_;
+
+  // Body filter (agentic-humanoid fork); null when body_filter.enable is false.
+  std::unique_ptr<BodyFilter> body_filter_;
+  // Depth pixels to integrate: image::kMaskedValue, or 0 on the robot's body.
+  MonoImage body_mask_image_{MemoryType::kDevice};
+  MonoImage body_mask_image_host_{MemoryType::kHost};
+  // What the body filter did since the last statistics line.
+  struct BodyFilterStatistics
+  {
+    int depth_frames = 0;
+    int64_t depth_masked = 0;
+    int depth_masked_max = 0;
+    int depth_dropped = 0;
+    int lidar_scans = 0;
+    int64_t lidar_masked = 0;
+    int lidar_masked_max = 0;
+    int lidar_dropped = 0;
+  };
+  BodyFilterStatistics body_filter_statistics_;
+  // The last body link lookup, reused between a message's ready check and its processing.
+  struct BodyLinkPoses
+  {
+    bool valid = false;
+    std::string sensor_frame;
+    rclcpp::Time timestamp;
+    std::vector<Transform> T_S_links;
+  };
+  BodyLinkPoses body_link_poses_;
+  std::chrono::steady_clock::time_point body_filter_statistics_last_time_;
 
   // Cache the last known number of subscribers.
   size_t mesh_subscriber_count_ = 0;

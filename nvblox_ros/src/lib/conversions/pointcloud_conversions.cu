@@ -66,7 +66,9 @@ PointcloudConverter::PointcloudConverter()
 
 PointcloudConverter::PointcloudConverter(
     std::shared_ptr<CudaStream> cuda_stream)
-    : cuda_stream_(cuda_stream) {}
+    : cuda_stream_(cuda_stream),
+      num_body_points_device_(make_unified<int>(MemoryType::kDevice)),
+      num_body_points_host_(make_unified<int>(MemoryType::kHost)) {}
 
 bool PointcloudConverter::checkLidarPointcloud(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr& pointcloud,
@@ -118,6 +120,8 @@ __global__ void depthImageFromPointcloudKernel(
     const Lidar lidar,                   // NOLINT
     const int num_bytes_between_points,  // NOLINT
     const int num_points,                // NOLINT
+    const CapsuleSet body_capsules,      // NOLINT
+    int* num_body_points,                // NOLINT
     float* depth_image) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -129,6 +133,12 @@ __global__ void depthImageFromPointcloudKernel(
   const Vector3f point = pointcloud[idx];
 
   if (isnan(point.x()) || isnan(point.y()) || isnan(point.z())) {
+    return;
+  }
+
+  // The robot's own body: never integrated.
+  if (isPointInAnyCapsule(point, body_capsules)) {
+    atomicAdd(num_body_points, 1);
     return;
   }
 
@@ -147,9 +157,10 @@ __global__ void depthImageFromPointcloudKernel(
                 depth_image) = lidar.getDepth(point);
 }
 
-void PointcloudConverter::depthImageFromPointcloudGPU(
+int PointcloudConverter::depthImageFromPointcloudGPU(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr& pointcloud,
-    const Lidar& lidar, DepthImage* depth_image_ptr) {
+    const Lidar& lidar, DepthImage* depth_image_ptr,
+    const CapsuleSet* body_capsules) {
   CHECK(depth_image_ptr->memory_type() == MemoryType::kDevice ||
         depth_image_ptr->memory_type() == MemoryType::kUnified);
 
@@ -163,6 +174,7 @@ void PointcloudConverter::depthImageFromPointcloudGPU(
 
   // Set the entire image to 0.
   depth_image_ptr->setZeroAsync(*cuda_stream_);
+  num_body_points_device_.setZeroAsync(*cuda_stream_);
 
   // Get a pointer to the pointcloud
   sensor_msgs::PointCloud2ConstIterator<float> iter_xyz(*pointcloud, "x");
@@ -197,9 +209,13 @@ void PointcloudConverter::depthImageFromPointcloudGPU(
   depthImageFromPointcloudKernel<<<num_thread_blocks, num_threads_per_block, 0,
                                    *cuda_stream_>>>(
       lidar_pointcloud_device_.data(), lidar, num_bytes_between_points,
-      num_copied_points, depth_image_ptr->dataPtr());
+      num_copied_points,
+      body_capsules != nullptr ? *body_capsules : CapsuleSet(),
+      num_body_points_device_.get(), depth_image_ptr->dataPtr());
+  num_body_points_device_.copyToAsync(num_body_points_host_, *cuda_stream_);
   checkCudaErrors(cudaStreamSynchronize(*cuda_stream_));
   checkCudaErrors(cudaPeekAtLastError());
+  return *num_body_points_host_;
 }
 
 struct Vector3fToPcl {

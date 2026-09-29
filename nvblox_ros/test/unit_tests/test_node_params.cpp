@@ -75,7 +75,7 @@ TEST(BaseNodeParams, initialize) {
 }
 
 TEST(NvbloxNodeParams, initialize) {
-  constexpr size_t kExpectedParamSize = 2096;
+  constexpr size_t kExpectedParamSize = 2192;
   testParamSize(kExpectedParamSize, sizeof(NvbloxNodeParams));
 
   auto node = std::make_shared<rclcpp::Node>("node", rclcpp::NodeOptions());
@@ -130,6 +130,33 @@ TEST(NvbloxNodeParams, initialize) {
   testParam<float>(node.get(), params.clear_map_outside_radius_rate_hz);
   testParam<float>(node.get(), params.esdf_and_gradients_unobserved_value);
   testParam<float>(node.get(), params.map_clearing_radius_m);
+  testParam<bool>(node.get(), params.body_filter_enable);
+  testParam<float>(node.get(), params.body_filter_tf_timeout_s);
+  testParam<float>(node.get(), params.body_filter_margin_m);
+  EXPECT_FALSE(params.body_filter_enable.get());
+}
+
+TEST(BodyCapsuleParams, initialize) {
+  auto empty = std::make_shared<rclcpp::Node>("empty", rclcpp::NodeOptions());
+  EXPECT_TRUE(initializeBodyCapsuleParams(empty.get()).empty());
+
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({
+      {"body_filter.capsules.names", std::vector<std::string>{"forearm"}},
+      {"body_filter.capsules.forearm.start_link", "elbow"},
+      {"body_filter.capsules.forearm.end_link", "wrist"},
+      {"body_filter.capsules.forearm.end_offset", std::vector<double>{0.1, 0.0, -0.2}},
+      {"body_filter.capsules.forearm.radius", 0.06},
+    });
+  auto node = std::make_shared<rclcpp::Node>("node", options);
+  const std::vector<BodyCapsule> capsules = initializeBodyCapsuleParams(node.get());
+  ASSERT_EQ(capsules.size(), 1u);
+  EXPECT_EQ(capsules[0].name, "forearm");
+  EXPECT_EQ(capsules[0].start.link, "elbow");
+  EXPECT_EQ(capsules[0].start.offset, Vector3f::Zero());
+  EXPECT_EQ(capsules[0].end.link, "wrist");
+  EXPECT_TRUE(capsules[0].end.offset.isApprox(Vector3f(0.1f, 0.0f, -0.2f)));
+  EXPECT_FLOAT_EQ(capsules[0].radius, 0.06f);
 }
 
 TEST(FuserNodeParams, initialize) {

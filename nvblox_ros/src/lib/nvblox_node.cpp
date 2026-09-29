@@ -23,9 +23,11 @@
 #include <nvblox/utils/delays.h>
 #include <nvblox/utils/rates.h>
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -90,6 +92,13 @@ NvbloxNode::NvbloxNode(const rclcpp::NodeOptions& options,
   // Set the transformer settings.
   transformer_.set_global_frame(params_.global_frame.get());
   transformer_.set_pose_frame(params_.pose_frame.get());
+
+  // Declared either way, so the body model can stay in the parameter files.
+  const std::vector<BodyCapsule> body_capsules =
+      initializeBodyCapsuleParams(this);
+  if (params_.body_filter_enable) {
+    initializeBodyFilter(body_capsules);
+  }
 
   // Create callback groups, which allows processing to go in parallel with the
   // subscriptions.
@@ -373,6 +382,11 @@ void NvbloxNode::subscribeToTopics() {
 }
 
 void NvbloxNode::advertiseTopics() {
+  if (body_filter_) {
+    // Published only while something subscribes (Foxglove, for tuning).
+    body_mask_publisher_ = create_publisher<sensor_msgs::msg::Image>(
+        "~/body_filter/depth_mask", 1);
+  }
   RCLCPP_INFO_STREAM(get_logger(), "NvbloxNode::advertiseTopics()");
   // Static esdf
   static_esdf_pointcloud_publisher_ =
@@ -658,6 +672,10 @@ void NvbloxNode::tick() {
     publish_debug_vis_last_time_ = now;
   }
 
+  if (body_filter_) {
+    logBodyFilterStatistics();
+  }
+
   // nvblox statistics
   auto& clk = *get_clock();
   if (params_.print_timings_to_console) {
@@ -705,7 +723,11 @@ bool NvbloxNode::isPoseAvailable(const ImageTypeVariant& variant_msg) {
 
 void NvbloxNode::processDepthQueue() {
   auto message_ready = [this](const ImageTypeVariant& variant_msg) -> bool {
-    return this->isPoseAvailable(variant_msg);
+    const sensor_msgs::msg::Image::ConstSharedPtr img_msg =
+        std::get<kMsgTupleImageIdx>(decomposeImageTypeVariant(variant_msg));
+    return this->isPoseAvailable(variant_msg) &&
+           this->isBodyTfReady(img_msg->header.frame_id,
+                               getTimestamp(img_msg));
   };
 
   auto process_image_msg = [this](const ImageTypeVariant& msg) -> bool {
@@ -738,7 +760,8 @@ void NvbloxNode::processColorQueue() {
 void NvbloxNode::processPointcloudQueue() {
   using PointcloudMsg = sensor_msgs::msg::PointCloud2::ConstSharedPtr;
   auto message_ready = [this](const PointcloudMsg& msg) {
-    return this->canTransform(msg->header.frame_id, msg->header.stamp);
+    return this->canTransform(msg->header.frame_id, msg->header.stamp) &&
+           this->isBodyTfReady(msg->header.frame_id, msg->header.stamp);
   };
   processQueue<PointcloudMsg>(pointcloud_queue_,         // NOLINT
                               &pointcloud_queue_mutex_,  // NOLINT
@@ -929,6 +952,132 @@ void NvbloxNode::decayTsdf() {
   static_mapper_->decayTsdf();
 }
 
+void NvbloxNode::initializeBodyFilter(
+    const std::vector<BodyCapsule>& body_capsules) {
+  CHECK(!body_capsules.empty())
+      << "body_filter.enable is set, but body_filter.capsules.names is empty";
+  CHECK(!isUsingHumanOrDynamicMapper(params_.mapping_type))
+      << "The body filter supports the static mapping types only, not "
+      << toString(params_.mapping_type);
+  CHECK(!params_.use_segmentation)
+      << "The body filter and segmentation masks cannot be used together";
+  CHECK(transformer_.use_tf_transforms())
+      << "The body filter places its capsules from TF (use_tf_transforms)";
+  body_filter_ = std::make_unique<BodyFilter>(
+      body_capsules, params_.body_filter_margin_m.get(), cuda_stream_);
+  body_filter_statistics_last_time_ = std::chrono::steady_clock::now();
+  std::stringstream links;
+  for (const std::string& link : body_filter_->links()) {
+    links << " " << link;
+  }
+  RCLCPP_INFO_STREAM(get_logger(),
+                     "Body filter on: " << body_capsules.size()
+                                        << " capsules, margin "
+                                        << params_.body_filter_margin_m.get()
+                                        << " m, links:" << links.str());
+}
+
+bool NvbloxNode::isBodyTfReady(const std::string& sensor_frame,
+                               const rclcpp::Time& timestamp) {
+  if (!body_filter_) {
+    return true;
+  }
+  if (lookupBodyLinks(sensor_frame, timestamp)) {
+    return true;
+  }
+  // Waited long enough: hand it on to be dropped.
+  return (get_clock()->now() - timestamp).seconds() >
+         params_.body_filter_tf_timeout_s.get();
+}
+
+bool NvbloxNode::lookupBodyLinks(const std::string& sensor_frame,
+                                 const rclcpp::Time& timestamp) {
+  // The ready check and the processing look up the same frame and stamp.
+  auto& cache = body_link_poses_;
+  if (cache.valid && cache.sensor_frame == sensor_frame &&
+      cache.timestamp == timestamp) {
+    return true;
+  }
+  timing::Timer timer("ros/body_filter/lookup_links");
+  cache.valid = false;
+  cache.T_S_links.resize(body_filter_->links().size());
+  for (size_t i = 0; i < cache.T_S_links.size(); ++i) {
+    if (!transformer_.lookupTransform(sensor_frame, body_filter_->links()[i],
+                                      timestamp, &cache.T_S_links[i])) {
+      return false;
+    }
+  }
+  cache.sensor_frame = sensor_frame;
+  cache.timestamp = timestamp;
+  cache.valid = true;
+  return true;
+}
+
+bool NvbloxNode::placeBodyCapsules(const std::string& sensor_frame,
+                                   const rclcpp::Time& timestamp) {
+  timing::Timer timer("ros/body_filter/place_capsules");
+  if (!lookupBodyLinks(sensor_frame, timestamp)) {
+    return false;
+  }
+  body_filter_->setLinkPoses(body_link_poses_.T_S_links);
+  return true;
+}
+
+void NvbloxNode::publishBodyMask(const std::string& frame_id,
+                                 const rclcpp::Time& timestamp) {
+  if (body_mask_publisher_->get_subscription_count() == 0) {
+    return;
+  }
+  body_mask_image_host_.copyFromAsync(body_mask_image_, *cuda_stream_);
+  cuda_stream_->synchronize();
+  sensor_msgs::msg::Image msg;
+  msg.header.frame_id = frame_id;
+  msg.header.stamp = timestamp;
+  msg.height = body_mask_image_host_.rows();
+  msg.width = body_mask_image_host_.cols();
+  msg.encoding = "mono8";
+  msg.step = body_mask_image_host_.stride_num_elements();
+  const uint8_t* data = body_mask_image_host_.dataConstPtr();
+  msg.data.assign(data, data + msg.step * msg.height);
+  body_mask_publisher_->publish(msg);
+}
+
+void NvbloxNode::logBodyFilterStatistics() {
+  const auto now = std::chrono::steady_clock::now();
+  if (now - body_filter_statistics_last_time_ < std::chrono::seconds(1)) {
+    return;
+  }
+  body_filter_statistics_last_time_ = now;
+  auto& statistics = body_filter_statistics_;
+  // Nothing arrived (sensors not up yet, or the simulator paused).
+  if (statistics.depth_frames + statistics.depth_dropped +
+          statistics.lidar_scans + statistics.lidar_dropped ==
+      0) {
+    return;
+  }
+  std::stringstream line;
+  line << "Body filter, last second: ";
+  if (params_.use_depth) {
+    line << statistics.depth_frames << " depth images, masked "
+         << (statistics.depth_frames > 0
+                 ? statistics.depth_masked / statistics.depth_frames
+                 : 0)
+         << " px per image (max " << statistics.depth_masked_max << "), "
+         << statistics.depth_dropped << " dropped without TF";
+  }
+  if (params_.use_lidar) {
+    line << (params_.use_depth ? "; " : "") << statistics.lidar_scans
+         << " LiDAR scans, masked "
+         << (statistics.lidar_scans > 0
+                 ? statistics.lidar_masked / statistics.lidar_scans
+                 : 0)
+         << " points per scan (max " << statistics.lidar_masked_max << "), "
+         << statistics.lidar_dropped << " dropped without TF";
+  }
+  RCLCPP_INFO_STREAM(get_logger(), line.str());
+  statistics = BodyFilterStatistics();
+}
+
 bool NvbloxNode::canTransform(const std::string& frame_id,
                               const rclcpp::Time& timestamp) {
   Transform T_L_C;
@@ -1017,6 +1166,16 @@ bool NvbloxNode::processDepthImage(const ImageTypeVariant& depth_msg) {
     }
     T_CM_CD = T_L_C_mask.inverse() * T_L_C_depth_;
   }
+  // Without the body's TF the image is dropped, never integrated unfiltered.
+  if (body_filter_ && !placeBodyCapsules(depth_frame, depth_image_timestamp)) {
+    ++body_filter_statistics_.depth_dropped;
+    RCLCPP_WARN_STREAM_THROTTLE(
+        get_logger(), *get_clock(), kTimeBetweenDebugMessagesMs,
+        "Body filter: dropping a depth image in "
+            << depth_frame << ", no TF for the body links at its stamp within "
+            << params_.body_filter_tf_timeout_s.get() << " s");
+    return true;
+  }
 
   transform_timer.Stop();
   timing::Timer conversions_timer("ros/depth/conversions");
@@ -1043,12 +1202,34 @@ bool NvbloxNode::processDepthImage(const ImageTypeVariant& depth_msg) {
     }
   }
   conversions_timer.Stop();
+  if (body_filter_) {
+    timing::Timer body_filter_timer("ros/depth/body_filter");
+    body_filter_->maskDepthImage(depth_image_, depth_camera_,
+                                 &body_mask_image_);
+    body_filter_timer.Stop();
+  }
   // Do the actual depth integration
   timing::Timer integration_timer("ros/depth/integrate");
   timing::Rates::tick("ros/depth");
   if (mask_img_opt) {
     multi_mapper_->integrateDepth(depth_image_, mask_image_, T_L_C_depth_,
                                   T_CM_CD, depth_camera_, mask_camera);
+  } else if (body_filter_) {
+    // Static mapping only (checked at startup), which integrates into the
+    // static mapper alone. A body pixel clears the space in front of it but
+    // adds no surface.
+    static_mapper_->integrateDepth(
+        MaskedDepthImageConstView(depth_image_,
+                                  MonoImageConstView(body_mask_image_)),
+        T_L_C_depth_, depth_camera_);
+    // Read only now: the integration has waited for the stream already.
+    const int num_masked = body_filter_->numMaskedPixels();
+    auto& statistics = body_filter_statistics_;
+    ++statistics.depth_frames;
+    statistics.depth_masked += num_masked;
+    statistics.depth_masked_max =
+        std::max(statistics.depth_masked_max, num_masked);
+    publishBodyMask(depth_frame, depth_image_timestamp);
   } else {
     multi_mapper_->integrateDepth(depth_image_, T_L_C_depth_, depth_camera_,
                                   update_time_ms);
@@ -1310,6 +1491,16 @@ bool NvbloxNode::processLidarPointcloud(
           target_frame, pointcloud_ptr->header.stamp, &T_L_C)) {
     return false;
   }
+  // Without the body's TF the scan is dropped, never integrated unfiltered.
+  if (body_filter_ && !placeBodyCapsules(target_frame, pointcloud_timestamp)) {
+    ++body_filter_statistics_.lidar_dropped;
+    RCLCPP_WARN_STREAM_THROTTLE(
+        get_logger(), *get_clock(), kTimeBetweenDebugMessagesMs,
+        "Body filter: dropping a LiDAR scan in "
+            << target_frame << ", no TF for the body links at its stamp within "
+            << params_.body_filter_tf_timeout_s.get() << " s");
+    return true;
+  }
 
   transform_timer.Stop();
 
@@ -1341,9 +1532,17 @@ bool NvbloxNode::processLidarPointcloud(
   }
 
   timing::Timer lidar_conversion_timer("ros/lidar/conversion");
-  pointcloud_converter_.depthImageFromPointcloudGPU(pointcloud_ptr, lidar,
-                                                    &pointcloud_image_);
+  const int num_body_points = pointcloud_converter_.depthImageFromPointcloudGPU(
+      pointcloud_ptr, lidar, &pointcloud_image_,
+      body_filter_ ? &body_filter_->capsules() : nullptr);
   lidar_conversion_timer.Stop();
+  if (body_filter_) {
+    auto& statistics = body_filter_statistics_;
+    ++statistics.lidar_scans;
+    statistics.lidar_masked += num_body_points;
+    statistics.lidar_masked_max =
+        std::max(statistics.lidar_masked_max, num_body_points);
+  }
 
   timing::Timer lidar_integration_timer("ros/lidar/integration");
   static_mapper_->integrateLidarDepth(pointcloud_image_, T_L_C, lidar);

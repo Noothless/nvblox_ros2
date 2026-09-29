@@ -87,6 +87,7 @@ find_package(CUDAToolkit REQUIRED)
 # LIBRARIES #
 #############
 add_library(${PROJECT_NAME}_lib SHARED
+  src/lib/body_filter.cu
   src/lib/conversions/image_conversions.cpp
   src/lib/conversions/image_conversions_thrust.cu
   src/lib/conversions/occupancy_conversions.cpp
