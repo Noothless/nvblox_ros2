@@ -136,6 +136,12 @@ __global__ void depthImageFromPointcloudKernel(
     return;
   }
 
+  // Too near to integrate. Some drivers (Livox) send missing returns at the
+  // sensor's origin; skipping them here keeps them out of the body count.
+  if (lidar.getDepth(point) < lidar.min_valid_range_m()) {
+    return;
+  }
+
   // The robot's own body: never integrated.
   if (isPointInAnyCapsule(point, body_capsules)) {
     atomicAdd(num_body_points, 1);
@@ -191,11 +197,13 @@ int PointcloudConverter::depthImageFromPointcloudGPU(
     cuda_stream_->synchronize();
   }
 
-  // Copy the pointcloud into pinned host memory
+  // Copy the pointcloud into pinned host memory. Pass our stream: push_back's
+  // default argument creates, synchronizes and destroys a CUDA stream for
+  // every point (about 3 us each, 40 ms for a 14,000-point scan).
   lidar_pointcloud_host_.clearNoDeallocate();
   for (; iter_xyz != iter_xyz.end(); ++iter_xyz) {
     lidar_pointcloud_host_.push_back(
-        Vector3f(iter_xyz[0], iter_xyz[1], iter_xyz[2]));
+        Vector3f(iter_xyz[0], iter_xyz[1], iter_xyz[2]), *cuda_stream_);
   }
   // Copy the pointcloud to the GPU
   lidar_pointcloud_device_.copyFromAsync(lidar_pointcloud_host_, *cuda_stream_);

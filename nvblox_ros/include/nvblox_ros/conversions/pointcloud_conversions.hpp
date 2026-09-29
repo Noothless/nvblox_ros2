@@ -65,7 +65,8 @@ public:
   // Convert pointcloud to depth image.
   // agentic-humanoid fork: points inside any of body_capsules (in the cloud's
   // frame) are dropped, so their pixels stay invalid (0) unless another point
-  // lands there. Returns the number of points dropped that way.
+  // lands there. Returns the number of points dropped that way; points nearer
+  // than the LiDAR's minimum range are skipped first and not counted.
   int depthImageFromPointcloudGPU(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & pointcloud,
     const Lidar & lidar, DepthImage * depth_image_ptr,
