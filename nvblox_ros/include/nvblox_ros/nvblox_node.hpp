@@ -215,11 +215,13 @@ protected:
     const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr & occupancy_grid_publisher,
     const float unknown_value, const Mapper * mapper_2 = nullptr);
 
-  // Publish an occupancy grid message from a slice image.
+  // Publish an occupancy grid message from a slice image. The grid is drawn at
+  // origin_z_position, the slice height, so it sits where it was cut.
   void publishOccupancyGridMsg(
     const float voxel_size, const int width,
     const int height, const double origin_x_position,
-    const double origin_y_position, const nvblox::Image<float> & map_slice_image,
+    const double origin_y_position, const double origin_z_position,
+    const nvblox::Image<float> & map_slice_image,
     const float unknown_value,
     const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr & occupancy_grid_publisher);
 

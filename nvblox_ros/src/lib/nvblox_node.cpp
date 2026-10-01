@@ -904,6 +904,7 @@ void NvbloxNode::sliceAndPublishEsdf(
       if (width > 0 && height > 0) {
         publishOccupancyGridMsg(mapper->esdf_layer().voxel_size(), width,
                                 height, aabb.min().x(), aabb.min().y(),
+                                mapper->esdf_integrator().esdf_slice_height(),
                                 map_slice_image, unknown_value,
                                 occupancy_grid_publisher);
       }
@@ -914,6 +915,7 @@ void NvbloxNode::sliceAndPublishEsdf(
 void NvbloxNode::publishOccupancyGridMsg(
     const float voxel_size, const int width, const int height,
     const double origin_x_position, const double origin_y_position,
+    const double origin_z_position,
     const nvblox::Image<float>& map_slice_image, const float unknown_value,
     const rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr&
         occupancy_grid_publisher) {
@@ -929,7 +931,7 @@ void NvbloxNode::publishOccupancyGridMsg(
   occupancy_grid_msg.info.height = height;
   occupancy_grid_msg.info.origin.position.x = origin_x_position;
   occupancy_grid_msg.info.origin.position.y = origin_y_position;
-  occupancy_grid_msg.info.origin.position.z = 0;
+  occupancy_grid_msg.info.origin.position.z = origin_z_position;
   occupancy_grid_msg.info.origin.orientation.x = 0;
   occupancy_grid_msg.info.origin.orientation.y = 0;
   occupancy_grid_msg.info.origin.orientation.z = 0;
