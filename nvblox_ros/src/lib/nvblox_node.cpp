@@ -221,6 +221,8 @@ void NvbloxNode::initializeMultiMapper() {
   // Set the mapper parameters
   multi_mapper_->setMapperParams(static_mapper_params, dynamic_mapper_params);
   multi_mapper_->setMultiMapperParams(multi_mapper_params);
+  applyWorkspaceBoundsToLidar(multi_mapper_->background_mapper().get());
+  applyWorkspaceBoundsToLidar(multi_mapper_->foreground_mapper().get());
 
   // Get direct handles to the underlying mappers
   // NOTE(remos): Ideally, everything would be handled by the multi mapper

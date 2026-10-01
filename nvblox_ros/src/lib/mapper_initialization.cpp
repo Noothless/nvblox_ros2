@@ -466,4 +466,17 @@ MapperParams getMapperParamsFromROS(const std::string & mapper_name, rclcpp::Nod
   return params;
 }
 
+void applyWorkspaceBoundsToLidar(Mapper * mapper)
+{
+  const ViewCalculator & camera_view = mapper->tsdf_integrator().view_calculator();
+  for (ViewCalculator * lidar_view :
+    {&mapper->lidar_tsdf_integrator().view_calculator(),
+      &mapper->lidar_occupancy_integrator().view_calculator()})
+  {
+    lidar_view->workspace_bounds_type(camera_view.workspace_bounds_type());
+    lidar_view->workspace_bounds_min_corner_m(camera_view.workspace_bounds_min_corner_m());
+    lidar_view->workspace_bounds_max_corner_m(camera_view.workspace_bounds_max_corner_m());
+  }
+}
+
 }  // namespace nvblox

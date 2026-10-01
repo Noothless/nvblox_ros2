@@ -36,6 +36,7 @@ endfunction()
 # nvblox ROS unit tests
 add_nvblox_ros_unit_test(test_body_filter TRUE)
 add_nvblox_ros_unit_test(test_esdf_and_gradient_conversions)
+add_nvblox_ros_unit_test(test_lidar_workspace_bounds TRUE)
 add_nvblox_ros_unit_test(test_node_params)
 add_nvblox_ros_unit_test(test_pointcloud_conversions TRUE)
 add_nvblox_ros_unit_test(test_rosbag_data_loader)

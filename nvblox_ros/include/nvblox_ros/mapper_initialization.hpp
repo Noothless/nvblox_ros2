@@ -49,6 +49,11 @@ void set_parameter(
 MapperParams getMapperParamsFromROS(const std::string & mapper_name, rclcpp::Node * node);
 MultiMapperParams getMultiMapperParamsFromROS(rclcpp::Node * node);
 
+// Mapper::setMapperParams sets the workspace bounds on the camera's
+// integrators only; the LiDAR's integrators have their own view calculators
+// and stay unbounded. This copies the camera's bounds onto them.
+void applyWorkspaceBoundsToLidar(Mapper * mapper);
+
 }  // namespace nvblox
 
 #include "nvblox_ros/impl/mapper_initialization_impl.hpp"
