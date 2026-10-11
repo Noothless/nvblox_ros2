@@ -173,6 +173,8 @@ void initializeNvbloxNodeParams(
   initParam<bool>(node, &params->body_filter_enable, parameter_tree);
   initParam<float>(node, &params->body_filter_tf_timeout_s, parameter_tree);
   initParam<float>(node, &params->body_filter_margin_m, parameter_tree);
+  initParam<bool>(node, &params->body_filter_held_object_enable, parameter_tree);
+  initParam<float>(node, &params->body_filter_held_object_margin_m, parameter_tree);
 }
 
 std::vector<BodyCapsule> initializeBodyCapsuleParams(rclcpp::Node * node)

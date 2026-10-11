@@ -53,6 +53,7 @@
 #include <nvblox_msgs/srv/esdf_and_gradients.hpp>
 
 #include "nvblox_ros/body_filter.hpp"
+#include "nvblox_ros/held_objects.hpp"
 #include "nvblox_ros/layer_publishing.hpp"
 #include "nvblox_ros/conversions/image_conversions.hpp"
 #include "nvblox_ros/conversions/mesh_conversions.hpp"
@@ -428,6 +429,10 @@ protected:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr body_mask_publisher_;
   // Whether a hand holds something: switches the body filter's held capsules.
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr body_filter_holding_sub_;
+  // What a hand holds (body_filter.held_object.enable): the body filter's
+  // held objects.
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr
+    body_filter_held_object_sub_;
 
   // Services.
   rclcpp::Service<nvblox_msgs::srv::FilePath>::SharedPtr save_ply_service_;

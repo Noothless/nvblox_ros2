@@ -17,6 +17,7 @@
 #include "nvblox_ros/body_filter.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace nvblox {
@@ -52,6 +53,32 @@ std::vector<Capsule> placeCapsules(const std::vector<BodyCapsule>& model,
   return capsules;
 }
 
+BodyCapsule heldObjectCapsule(const std::string& link, const HeldShape shape,
+                              const Vector3f& size,
+                              const Transform& T_link_object,
+                              const float margin_m) {
+  CHECK(size.allFinite() && (size.array() > 0.0f).all())
+      << "A held object needs a positive size, not " << size.transpose();
+  int axis = 2;
+  float radius = 0.0f;
+  if (shape == HeldShape::kBox) {
+    size.maxCoeff(&axis);
+    const int a = (axis + 1) % 3;
+    const int b = (axis + 2) % 3;
+    radius = 0.5f * std::hypot(size[a], size[b]);
+  } else {
+    radius = 0.5f * std::max(size.x(), size.y());
+  }
+  const Vector3f half = 0.5f * size[axis] * T_link_object.linear().col(axis);
+  const Vector3f centre = T_link_object.translation();
+  BodyCapsule capsule;
+  capsule.name = link + "_held_object";
+  capsule.start = CapsuleEnd{link, centre - half};
+  capsule.end = CapsuleEnd{link, centre + half};
+  capsule.radius = radius + margin_m;
+  return capsule;
+}
+
 BodyFilter::BodyFilter(std::vector<BodyCapsule> model, const float margin_m,
                        std::shared_ptr<CudaStream> cuda_stream)
     : model_(std::move(model)),
@@ -75,6 +102,35 @@ void BodyFilter::setLinkPoses(const std::vector<Transform>& T_S_links) {
       capsules_.capsules[capsules_.num_capsules++] = placed[i];
     }
   }
+  std::vector<BodyCapsule> held_objects;
+  {
+    std::lock_guard<std::mutex> lock(held_objects_mutex_);
+    held_objects = held_objects_;
+  }
+  // setHeldObjects() checked their links and that they fit.
+  for (const Capsule& capsule :
+       placeCapsules(held_objects, links_, T_S_links, margin_m_)) {
+    capsules_.capsules[capsules_.num_capsules++] = capsule;
+  }
+}
+
+bool BodyFilter::setHeldObjects(std::vector<BodyCapsule> held_objects) {
+  bool valid = model_.size() + held_objects.size() <=
+               static_cast<size_t>(kMaxBodyCapsules);
+  for (const BodyCapsule& capsule : held_objects) {
+    for (const CapsuleEnd* end : {&capsule.start, &capsule.end}) {
+      valid = valid && std::find(links_.begin(), links_.end(), end->link) !=
+                           links_.end();
+    }
+  }
+  std::lock_guard<std::mutex> lock(held_objects_mutex_);
+  held_objects_ = valid ? std::move(held_objects) : std::vector<BodyCapsule>{};
+  return valid;
+}
+
+int BodyFilter::numHeldObjects() const {
+  std::lock_guard<std::mutex> lock(held_objects_mutex_);
+  return static_cast<int>(held_objects_.size());
 }
 
 bool BodyFilter::hasHeldCapsules() const {

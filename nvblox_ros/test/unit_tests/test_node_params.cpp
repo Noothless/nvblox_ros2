@@ -134,6 +134,8 @@ TEST(NvbloxNodeParams, initialize) {
   testParam<float>(node.get(), params.body_filter_tf_timeout_s);
   testParam<float>(node.get(), params.body_filter_margin_m);
   EXPECT_FALSE(params.body_filter_enable.get());
+  testParam<bool>(node.get(), params.body_filter_held_object_enable);
+  testParam<float>(node.get(), params.body_filter_held_object_margin_m);
 }
 
 TEST(BodyCapsuleParams, initialize) {

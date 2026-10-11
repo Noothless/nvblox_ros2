@@ -396,6 +396,40 @@ void NvbloxNode::subscribeToTopics() {
           body_filter_->setHolding(msg->data);
         });
   }
+  if (params_.body_filter_held_object_enable.get()) {
+    CHECK(body_filter_) << "body_filter.held_object.enable needs body_filter.enable";
+    // Latched by the pick server that grasped it (g1_definitions.held), the
+    // whole state in each message; an empty array: nothing held.
+    body_filter_held_object_sub_ =
+        create_subscription<visualization_msgs::msg::MarkerArray>(
+            "body_filter/held_object", rclcpp::QoS(1).reliable().transient_local(),
+            [this](const visualization_msgs::msg::MarkerArray::ConstSharedPtr msg) {
+              std::vector<BodyCapsule> capsules;
+              std::string error;
+              if (!heldObjectsFromMarkers(*msg, body_filter_->links(),
+                                          params_.body_filter_held_object_margin_m.get(),
+                                          &capsules, &error)) {
+                RCLCPP_ERROR_STREAM(get_logger(), "Body filter: " << error
+                                                      << "; no held object masked");
+              } else if (!body_filter_->setHeldObjects(capsules)) {
+                RCLCPP_ERROR_STREAM(get_logger(),
+                                    "Body filter: " << capsules.size()
+                                        << " held objects do not fit; none masked");
+                capsules.clear();
+              }
+              if (capsules.empty()) {
+                body_filter_->setHeldObjects({});
+              }
+              std::stringstream held;
+              for (const BodyCapsule& capsule : capsules) {
+                held << " " << capsule.start.link << " (radius " << capsule.radius
+                     << " m)";
+              }
+              RCLCPP_INFO_STREAM(get_logger(),
+                                 "Body filter: held objects:"
+                                     << (capsules.empty() ? " none" : held.str()));
+            });
+  }
 }
 
 void NvbloxNode::advertiseTopics() {
@@ -1089,6 +1123,9 @@ void NvbloxNode::logBodyFilterStatistics() {
   if (body_filter_->hasHeldCapsules()) {
     line << " (held capsules " << (body_filter_->holding() ? "on" : "off")
          << ")";
+  }
+  if (body_filter_held_object_sub_) {
+    line << " (held objects " << body_filter_->numHeldObjects() << ")";
   }
   line << ": ";
   if (params_.use_depth) {

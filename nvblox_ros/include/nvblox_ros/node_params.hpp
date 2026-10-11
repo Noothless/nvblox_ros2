@@ -283,6 +283,17 @@ constexpr Param<float>::Description kBodyFilterMarginMParamDesc{
   "body_filter.margin_m", 0.0F,
   "Added to every capsule radius, for TF latency and moving limbs."};
 
+constexpr Param<bool>::Description kBodyFilterHeldObjectEnableParamDesc{
+  "body_filter.held_object.enable", false,
+  "Whether to drop what a hand holds as one capsule around the box or cylinder the pick server "
+  "publishes in its palm (body_filter/held_object, a latched MarkerArray, empty while nothing is "
+  "held; agentic-humanoid's decision 29)."};
+
+constexpr Param<float>::Description kBodyFilterHeldObjectMarginMParamDesc{
+  "body_filter.held_object.margin_m", 0.02F,
+  "Added to a held object's capsule radius, for its slip in the hand and the look's fit error, "
+  "on top of body_filter.margin_m."};
+
 constexpr Param<bool>::Description kOutputPessimisticDistanceMap{
   "output_pessimistic_distance_map", true,
   "Whether or not to output the pessimistic distance map."};
@@ -402,6 +413,8 @@ public:
   Param<bool> body_filter_enable{kBodyFilterEnableParamDesc};
   Param<float> body_filter_tf_timeout_s{kBodyFilterTfTimeoutSParamDesc};
   Param<float> body_filter_margin_m{kBodyFilterMarginMParamDesc};
+  Param<bool> body_filter_held_object_enable{kBodyFilterHeldObjectEnableParamDesc};
+  Param<float> body_filter_held_object_margin_m{kBodyFilterHeldObjectMarginMParamDesc};
 };
 
 /// Container for all node params of the fuser node.

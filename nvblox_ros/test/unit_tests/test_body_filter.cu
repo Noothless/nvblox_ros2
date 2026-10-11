@@ -19,6 +19,8 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <random>
+#include <string>
 #include <vector>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -26,6 +28,7 @@
 
 #include "nvblox_ros/body_filter.hpp"
 #include "nvblox_ros/conversions/pointcloud_conversions.hpp"
+#include "nvblox_ros/held_objects.hpp"
 
 namespace nvblox
 {
@@ -323,6 +326,178 @@ TEST(BodyFilter, HeldCapsulesOnlyWhileHolding) {
   // A model without held capsules filters everything always, as before.
   BodyFilter plain({model[0]}, 0.03f, cuda_stream);
   EXPECT_FALSE(plain.hasHeldCapsules());
+}
+
+// ---- the held object (agentic-humanoid's decision 29) ----
+
+// The held object's capsule placed on its link at the identity.
+Capsule placedAtIdentity(const BodyCapsule & capsule)
+{
+  return placeCapsules({capsule}, {capsule.start.link}, {Transform::Identity()}, 0.0f)[0];
+}
+
+TEST(BodyFilter, HeldObjectCapsuleEnclosesBoxesAndCylinders) {
+  // Any size and pose, no margin: every corner of a box and every point on a
+  // cylinder's rims inside its capsule (as g1_definitions' test_body).
+  std::mt19937 rng(29);
+  std::uniform_real_distribution<float> length(0.02f, 0.3f);
+  std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
+  for (int i = 0; i < 200; ++i) {
+    Transform T = Transform::Identity();
+    T.linear() =
+      Eigen::Quaternionf(unit(rng), unit(rng), unit(rng), unit(rng)).normalized().toRotationMatrix();
+    T.translation() = 0.1f * Vector3f(unit(rng), unit(rng), unit(rng));
+    const Vector3f box(length(rng), length(rng), length(rng));
+    const Capsule box_capsule = placedAtIdentity(heldObjectCapsule("palm", HeldShape::kBox, box, T, 0.0f));
+    for (const float x : {-0.5f, 0.5f}) {
+      for (const float y : {-0.5f, 0.5f}) {
+        for (const float z : {-0.5f, 0.5f}) {
+          // Just inside the corner, for float rounding.
+          const Vector3f corner = T * (0.99999f * Vector3f(x * box.x(), y * box.y(), z * box.z()));
+          EXPECT_TRUE(isPointInCapsule(corner, box_capsule)) << i;
+        }
+      }
+    }
+    const Vector3f cylinder(box.x(), box.x(), box.z());
+    const Capsule cylinder_capsule =
+      placedAtIdentity(heldObjectCapsule("palm", HeldShape::kCylinder, cylinder, T, 0.0f));
+    for (int k = 0; k < 16; ++k) {
+      const float a = 2.0f * M_PI * k / 16.0f;
+      for (const float z : {-0.5f, 0.5f}) {
+        const Vector3f rim = T * (0.99999f * Vector3f(0.5f * cylinder.x() * std::cos(a),
+          0.5f * cylinder.x() * std::sin(a), z * cylinder.z()));
+        EXPECT_TRUE(isPointInCapsule(rim, cylinder_capsule)) << i;
+      }
+    }
+  }
+}
+
+TEST(BodyFilter, HeldObjectCapsuleAsG1Definitions) {
+  // test_body's test_the_held_objects_capsule_is_no_larger_than_needed: the
+  // mustard's box, the capsule along its height, the margin added once.
+  const BodyCapsule capsule = heldObjectCapsule(
+    "right_hand_palm_link", HeldShape::kBox, Vector3f(0.096f, 0.058f, 0.191f),
+    Transform::Identity(), 0.02f);
+  EXPECT_EQ(capsule.start.link, "right_hand_palm_link");
+  EXPECT_EQ(capsule.end.link, "right_hand_palm_link");
+  EXPECT_NEAR(capsule.radius, 0.5f * std::hypot(0.096f, 0.058f) + 0.02f, 1e-6f);
+  EXPECT_TRUE(capsule.start.offset.isApprox(Vector3f(0.0f, 0.0f, -0.0955f), kEps));
+  EXPECT_TRUE(capsule.end.offset.isApprox(Vector3f(0.0f, 0.0f, 0.0955f), kEps));
+  EXPECT_FALSE(capsule.held);
+}
+
+TEST(BodyFilter, HeldObjectsFollowTheirPalmUntilCleared) {
+  // The left hand of HeldCapsulesOnlyWhileHolding, without held capsules: the
+  // 134922 mustard's box in the palm is dropped while published, whatever
+  // holding() says, and mapped once cleared.
+  const std::vector<BodyCapsule> model = {
+    {"hand", {"wrist", Vector3f::Zero()}, {"palm", Vector3f(0.13f, 0.0f, 0.0f)}, 0.09f},
+  };
+  const std::vector<Transform> T_S_links = {
+    rotationAboutZ(0.0f, Vector3f(0.9f, 0.0f, 0.0f)),
+    rotationAboutZ(0.3f, Vector3f(1.0f, 0.2f, 0.1f)),
+  };
+  Transform T_palm_object = Transform::Identity();
+  T_palm_object.translation() = Vector3f(0.0598f, -0.0800f, -0.0272f);
+  const Vector3f size(0.096f, 0.058f, 0.191f);
+  // The box's far bottom corner, outside the hand's capsule.
+  const Vector3f corner = T_S_links[1] * T_palm_object * Vector3f(0.047f, -0.028f, -0.095f);
+  const Vector3f wall(0.0f, 3.0f, 0.0f);
+  const auto cloud = makeCloud({corner, wall});
+  const Lidar lidar(360, 61, 0.1f, 20.0f, M_PI / 3.0);
+
+  auto cuda_stream = std::make_shared<CudaStreamOwning>();
+  BodyFilter body_filter(model, 0.03f, cuda_stream);
+  body_filter.setLinkPoses(T_S_links);
+  ASSERT_FALSE(isPointInAnyCapsule(corner, body_filter.capsules()));
+
+  EXPECT_TRUE(body_filter.setHeldObjects(
+    {heldObjectCapsule("palm", HeldShape::kBox, size, T_palm_object, 0.0f)}));
+  EXPECT_EQ(body_filter.numHeldObjects(), 1);
+  EXPECT_EQ(body_filter.capsules().num_capsules, 1);  // from the next placement on
+  body_filter.setLinkPoses(T_S_links);
+  EXPECT_EQ(body_filter.capsules().num_capsules, 2);
+  EXPECT_FALSE(body_filter.holding());
+  EXPECT_TRUE(isPointInAnyCapsule(corner, body_filter.capsules()));
+  conversions::PointcloudConverter converter;
+  DepthImage range(MemoryType::kDevice);
+  EXPECT_EQ(
+    converter.depthImageFromPointcloudGPU(cloud, lidar, &range, &body_filter.capsules()), 1);
+
+  EXPECT_TRUE(body_filter.setHeldObjects({}));
+  body_filter.setLinkPoses(T_S_links);
+  EXPECT_EQ(body_filter.capsules().num_capsules, 1);
+  EXPECT_FALSE(isPointInAnyCapsule(corner, body_filter.capsules()));
+
+  // A held object on a link without a pose, or more than fit: refused, none kept.
+  EXPECT_TRUE(body_filter.setHeldObjects(
+    {heldObjectCapsule("palm", HeldShape::kBox, size, T_palm_object, 0.0f)}));
+  EXPECT_FALSE(body_filter.setHeldObjects(
+    {heldObjectCapsule("elbow", HeldShape::kBox, size, T_palm_object, 0.0f)}));
+  EXPECT_EQ(body_filter.numHeldObjects(), 0);
+  EXPECT_FALSE(body_filter.setHeldObjects(std::vector<BodyCapsule>(kMaxBodyCapsules,
+    heldObjectCapsule("palm", HeldShape::kBox, size, T_palm_object, 0.0f))));
+  EXPECT_EQ(body_filter.numHeldObjects(), 0);
+}
+
+visualization_msgs::msg::Marker heldMarker(
+  const std::string & frame, int type, const Vector3f & position, const Vector3f & size)
+{
+  visualization_msgs::msg::Marker m;
+  m.header.frame_id = frame;
+  m.ns = frame.substr(0, frame.find('_'));
+  m.type = type;
+  m.pose.position.x = position.x();
+  m.pose.position.y = position.y();
+  m.pose.position.z = position.z();
+  m.pose.orientation.w = 1.0;
+  m.scale.x = size.x();
+  m.scale.y = size.y();
+  m.scale.z = size.z();
+  return m;
+}
+
+TEST(BodyFilter, HeldObjectsFromMarkers) {
+  using Marker = visualization_msgs::msg::Marker;
+  const std::vector<std::string> links = {"left_hand_palm_link", "right_hand_palm_link"};
+  visualization_msgs::msg::MarkerArray msg;
+  msg.markers.push_back(heldMarker("left_hand_palm_link", Marker::CUBE,
+    Vector3f(0.06f, -0.08f, -0.03f), Vector3f(0.096f, 0.058f, 0.191f)));
+  msg.markers.push_back(heldMarker("right_hand_palm_link", Marker::CYLINDER,
+    Vector3f(0.06f, 0.08f, 0.0f), Vector3f(0.07f, 0.07f, 0.1f)));
+  std::vector<BodyCapsule> capsules;
+  std::string error;
+  ASSERT_TRUE(heldObjectsFromMarkers(msg, links, 0.02f, &capsules, &error)) << error;
+  ASSERT_EQ(capsules.size(), 2u);
+  EXPECT_EQ(capsules[0].start.link, "left_hand_palm_link");
+  EXPECT_NEAR(capsules[0].radius, 0.5f * std::hypot(0.096f, 0.058f) + 0.02f, 1e-6f);
+  EXPECT_TRUE(capsules[0].end.offset.isApprox(Vector3f(0.06f, -0.08f, 0.0655f), kEps));
+  EXPECT_EQ(capsules[1].start.link, "right_hand_palm_link");
+  EXPECT_NEAR(capsules[1].radius, 0.035f + 0.02f, 1e-6f);
+
+  // Nothing held.
+  ASSERT_TRUE(heldObjectsFromMarkers(visualization_msgs::msg::MarkerArray(), links, 0.02f,
+    &capsules, &error));
+  EXPECT_TRUE(capsules.empty());
+
+  // Not a held object: refused whole, with the reason.
+  auto refused = [&](const Marker & bad) {
+      visualization_msgs::msg::MarkerArray one = msg;
+      one.markers.push_back(bad);
+      const bool ok = heldObjectsFromMarkers(one, links, 0.02f, &capsules, &error);
+      return !ok && capsules.empty() && !error.empty();
+    };
+  const Vector3f size(0.1f, 0.06f, 0.19f);
+  EXPECT_TRUE(refused(heldMarker("torso_link", Marker::CUBE, Vector3f::Zero(), size)));
+  EXPECT_TRUE(refused(heldMarker("left_hand_palm_link", Marker::SPHERE, Vector3f::Zero(), size)));
+  EXPECT_TRUE(refused(heldMarker("left_hand_palm_link", Marker::CUBE, Vector3f::Zero(),
+    Vector3f(0.1f, 0.0f, 0.19f))));
+  Marker zero = heldMarker("left_hand_palm_link", Marker::CUBE, Vector3f::Zero(), size);
+  zero.pose.orientation.w = 0.0;
+  EXPECT_TRUE(refused(zero));
+  Marker nan = heldMarker("left_hand_palm_link", Marker::CUBE, Vector3f::Zero(), size);
+  nan.pose.position.x = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_TRUE(refused(nan));
 }
 
 }  // namespace nvblox

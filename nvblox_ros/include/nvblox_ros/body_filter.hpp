@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -108,6 +109,18 @@ struct BodyCapsule
 /// The links a body model hangs from, each once, in a fixed order.
 std::vector<std::string> bodyLinks(const std::vector<BodyCapsule> & model);
 
+/// The shape of a held object (agentic-humanoid's decision 29).
+enum class HeldShape { kBox, kCylinder };
+
+/// The capsule on link that encloses a held box or cylinder of size (in m; a
+/// cylinder's diameter in x and y, its height in z) at T_link_object, margin_m
+/// added: along a box's longest side, the radius half the diagonal of the
+/// other two; along a cylinder's z, half its larger diameter. The same capsule
+/// as g1_definitions.held.capsule. CHECKs a positive, finite size.
+BodyCapsule heldObjectCapsule(
+  const std::string & link, HeldShape shape, const Vector3f & size,
+  const Transform & T_link_object, float margin_m);
+
 /// Places the body model in a sensor frame.
 /// @param model The body model.
 /// @param links The links, as returned by bodyLinks(model).
@@ -143,6 +156,15 @@ public:
   /// Whether the model has held capsules.
   bool hasHeldCapsules() const;
 
+  /// The held objects' capsules (heldObjectCapsule), each on a link of
+  /// links(), placed after the model's at every setLinkPoses() from the next
+  /// one on; replaces the last set (empty: nothing held). Independent of
+  /// holding(): the publisher clears them. Safe to call from another thread.
+  /// Returns false, and keeps none, if a capsule hangs from a link the model
+  /// has no pose for or the model and the held objects exceed kMaxBodyCapsules.
+  bool setHeldObjects(std::vector<BodyCapsule> held_objects);
+  int numHeldObjects() const;
+
   /// The capsules placed by the last setLinkPoses().
   const CapsuleSet & capsules() const {return capsules_;}
 
@@ -165,6 +187,8 @@ private:
   float margin_m_;
   std::shared_ptr<CudaStream> cuda_stream_;
   std::atomic<bool> holding_{false};
+  mutable std::mutex held_objects_mutex_;
+  std::vector<BodyCapsule> held_objects_;
 
   CapsuleSet capsules_;
   unified_ptr<int> num_masked_device_;
