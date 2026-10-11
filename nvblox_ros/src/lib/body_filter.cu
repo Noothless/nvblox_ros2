@@ -68,8 +68,18 @@ BodyFilter::BodyFilter(std::vector<BodyCapsule> model, const float margin_m,
 void BodyFilter::setLinkPoses(const std::vector<Transform>& T_S_links) {
   const std::vector<Capsule> placed =
       placeCapsules(model_, links_, T_S_links, margin_m_);
-  capsules_.num_capsules = placed.size();
-  std::copy(placed.begin(), placed.end(), capsules_.capsules);
+  const bool holding = holding_;
+  capsules_.num_capsules = 0;
+  for (size_t i = 0; i < placed.size(); ++i) {
+    if (!model_[i].held || holding) {
+      capsules_.capsules[capsules_.num_capsules++] = placed[i];
+    }
+  }
+}
+
+bool BodyFilter::hasHeldCapsules() const {
+  return std::any_of(model_.begin(), model_.end(),
+                     [](const BodyCapsule& capsule) { return capsule.held; });
 }
 
 namespace {

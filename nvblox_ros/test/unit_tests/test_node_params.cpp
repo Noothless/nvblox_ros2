@@ -157,6 +157,25 @@ TEST(BodyCapsuleParams, initialize) {
   EXPECT_EQ(capsules[0].end.link, "wrist");
   EXPECT_TRUE(capsules[0].end.offset.isApprox(Vector3f(0.1f, 0.0f, -0.2f)));
   EXPECT_FLOAT_EQ(capsules[0].radius, 0.06f);
+  EXPECT_FALSE(capsules[0].held);
+
+  // Held capsules: filtered only while holding.
+  rclcpp::NodeOptions held_options;
+  held_options.parameter_overrides({
+      {"body_filter.capsules.names", std::vector<std::string>{"hand", "held"}},
+      {"body_filter.capsules.hand.start_link", "wrist"},
+      {"body_filter.capsules.hand.end_link", "palm"},
+      {"body_filter.capsules.hand.radius", 0.07},
+      {"body_filter.capsules.held.start_link", "palm"},
+      {"body_filter.capsules.held.end_link", "palm"},
+      {"body_filter.capsules.held.radius", 0.05},
+      {"body_filter.held_capsules", std::vector<std::string>{"held"}},
+    });
+  auto held_node = std::make_shared<rclcpp::Node>("held_node", held_options);
+  const std::vector<BodyCapsule> held = initializeBodyCapsuleParams(held_node.get());
+  ASSERT_EQ(held.size(), 2u);
+  EXPECT_FALSE(held[0].held);
+  EXPECT_TRUE(held[1].held);
 }
 
 TEST(FuserNodeParams, initialize) {

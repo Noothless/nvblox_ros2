@@ -45,6 +45,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 
@@ -425,6 +426,8 @@ protected:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
     tsdf_zero_crossings_pointcloud_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr body_mask_publisher_;
+  // Whether a hand holds something: switches the body filter's held capsules.
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr body_filter_holding_sub_;
 
   // Services.
   rclcpp::Service<nvblox_msgs::srv::FilePath>::SharedPtr save_ply_service_;

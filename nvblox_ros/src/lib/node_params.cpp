@@ -16,6 +16,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nvblox_ros/node_params.hpp"
+
+#include <algorithm>
+
 #include "nvblox_ros/mapper_initialization.hpp"
 
 namespace nvblox
@@ -197,6 +200,17 @@ std::vector<BodyCapsule> initializeBodyCapsuleParams(rclcpp::Node * node)
       << "Body capsule " << name << " needs start_link and end_link";
     CHECK_GT(body_capsule.radius, 0.0f) << "Body capsule " << name << " needs a radius";
     capsules.push_back(body_capsule);
+  }
+  // Filtered only while body_filter/holding is true (BodyCapsule::held).
+  const auto held = node->declare_parameter<std::vector<std::string>>(
+    "body_filter.held_capsules", std::vector<std::string>{});
+  for (const std::string & name : held) {
+    auto it = std::find_if(
+      capsules.begin(), capsules.end(),
+      [&](const BodyCapsule & capsule) {return capsule.name == name;});
+    CHECK(it != capsules.end())
+      << "body_filter.held_capsules names " << name << ", which is not in body_filter.capsules";
+    it->held = true;
   }
   return capsules;
 }

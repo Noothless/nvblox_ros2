@@ -249,4 +249,80 @@ TEST(BodyFilter, DropsBodyPointsFromLidarScans) {
   EXPECT_NEAR(range_host(u.y(), u.x()), lidar.getDepth(arm), kEps);
 }
 
+TEST(BodyFilter, HeldCapsulesOnlyWhileHolding) {
+  // The G1's left hand (g1_mapping's body_capsules.yaml): the hand from the
+  // wrist to 0.13 m past the palm, and the held capsule along the palm's z
+  // through the grasp centre. A bottle held upright reaches above and below
+  // the palm, outside the hand's capsule.
+  const std::vector<BodyCapsule> model = {
+    {"hand", {"wrist", Vector3f::Zero()}, {"palm", Vector3f(0.13f, 0.0f, 0.0f)}, 0.07f},
+    {"held", {"palm", Vector3f(0.08f, -0.04f, -0.10f)}, {"palm", Vector3f(0.08f, -0.04f, 0.10f)},
+      0.05f, true},
+  };
+  // The sensor 1 m behind the palm, looking along its x.
+  const std::vector<Transform> T_S_links = {
+    rotationAboutZ(0.0f, Vector3f(0.9f, 0.0f, 0.0f)),
+    rotationAboutZ(0.0f, Vector3f(1.0f, 0.0f, 0.0f)),
+  };
+  const Vector3f hand(1.05f, 0.0f, 0.0f);
+  // On the bottle 0.15 m above and below the palm: 0.155 m from the hand's
+  // axis (radius 0.10 with the margin), inside the held capsule.
+  const Vector3f bottle_top(1.08f, -0.04f, 0.15f);
+  const Vector3f bottle_bottom(1.08f, -0.04f, -0.15f);
+  // Beside the hand, so its own pixel of the range image.
+  const Vector3f wall(0.0f, 3.0f, 0.0f);
+  const auto cloud = makeCloud({hand, bottle_top, bottle_bottom, wall});
+  const Lidar lidar(360, 61, 0.1f, 20.0f, M_PI / 3.0);
+
+  auto cuda_stream = std::make_shared<CudaStreamOwning>();
+  BodyFilter body_filter(model, 0.03f, cuda_stream);
+  EXPECT_TRUE(body_filter.hasHeldCapsules());
+  EXPECT_FALSE(body_filter.holding());
+  conversions::PointcloudConverter converter;
+  DepthImage range(MemoryType::kDevice);
+  DepthImage range_host(MemoryType::kHost);
+  auto converted = [&](const Vector3f & p) {
+      Index2D u;
+      EXPECT_TRUE(lidar.project(p, &u));
+      return range_host(u.y(), u.x()) > 0.0f;
+    };
+
+  // An empty hand: only the hand is dropped; what it is about to grasp is mapped.
+  body_filter.setLinkPoses(T_S_links);
+  EXPECT_EQ(body_filter.capsules().num_capsules, 1);
+  EXPECT_TRUE(isPointInAnyCapsule(hand, body_filter.capsules()));
+  EXPECT_FALSE(isPointInAnyCapsule(bottle_top, body_filter.capsules()));
+  EXPECT_FALSE(isPointInAnyCapsule(bottle_bottom, body_filter.capsules()));
+  EXPECT_EQ(
+    converter.depthImageFromPointcloudGPU(cloud, lidar, &range, &body_filter.capsules()), 1);
+  range_host.copyFrom(range);
+  EXPECT_FALSE(converted(hand));
+  EXPECT_TRUE(converted(bottle_top));
+  EXPECT_TRUE(converted(bottle_bottom));
+  EXPECT_TRUE(converted(wall));
+
+  // Holding: the held object is dropped too, from the next placement on.
+  body_filter.setHolding(true);
+  EXPECT_EQ(body_filter.capsules().num_capsules, 1);
+  body_filter.setLinkPoses(T_S_links);
+  EXPECT_EQ(body_filter.capsules().num_capsules, 2);
+  EXPECT_TRUE(isPointInAnyCapsule(bottle_top, body_filter.capsules()));
+  EXPECT_EQ(
+    converter.depthImageFromPointcloudGPU(cloud, lidar, &range, &body_filter.capsules()), 3);
+  range_host.copyFrom(range);
+  EXPECT_FALSE(converted(hand));
+  EXPECT_FALSE(converted(bottle_top));
+  EXPECT_FALSE(converted(bottle_bottom));
+  EXPECT_TRUE(converted(wall));
+
+  // Let go: mapped again.
+  body_filter.setHolding(false);
+  body_filter.setLinkPoses(T_S_links);
+  EXPECT_FALSE(isPointInAnyCapsule(bottle_top, body_filter.capsules()));
+
+  // A model without held capsules filters everything always, as before.
+  BodyFilter plain({model[0]}, 0.03f, cuda_stream);
+  EXPECT_FALSE(plain.hasHeldCapsules());
+}
+
 }  // namespace nvblox

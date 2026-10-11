@@ -19,6 +19,7 @@
 
 #include <nvblox/nvblox.h>
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -98,6 +99,10 @@ struct BodyCapsule
   CapsuleEnd start;
   CapsuleEnd end;
   float radius = 0.0f;
+  /// Around what a hand holds: filtered only while the robot holds something
+  /// (BodyFilter::setHolding), so an empty hand does not hide what it is
+  /// about to grasp.
+  bool held = false;
 };
 
 /// The links a body model hangs from, each once, in a fixed order.
@@ -126,9 +131,17 @@ public:
   /// The links whose poses place the capsules, each once.
   const std::vector<std::string> & links() const {return links_;}
 
-  /// Places the capsules in the sensor frame.
+  /// Places the capsules in the sensor frame, the held ones only while holding().
   /// @param T_S_links The pose of each link in the sensor frame, in the order of links().
   void setLinkPoses(const std::vector<Transform> & T_S_links);
+
+  /// Whether a hand holds something; false until set. Takes effect at the next
+  /// setLinkPoses(). Safe to call from another thread.
+  void setHolding(bool holding) {holding_ = holding;}
+  bool holding() const {return holding_;}
+
+  /// Whether the model has held capsules.
+  bool hasHeldCapsules() const;
 
   /// The capsules placed by the last setLinkPoses().
   const CapsuleSet & capsules() const {return capsules_;}
@@ -151,6 +164,7 @@ private:
   std::vector<std::string> links_;
   float margin_m_;
   std::shared_ptr<CudaStream> cuda_stream_;
+  std::atomic<bool> holding_{false};
 
   CapsuleSet capsules_;
   unified_ptr<int> num_masked_device_;

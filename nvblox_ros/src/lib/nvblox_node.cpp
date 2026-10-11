@@ -381,6 +381,21 @@ void NvbloxNode::subscribeToTopics() {
       "pose", 10,
       std::bind(&Transformer::poseCallback, &transformer_,
                 std::placeholders::_1));
+
+  if (body_filter_ && body_filter_->hasHeldCapsules()) {
+    // Latched by its publisher (g1_manipulation's /manipulation/holding);
+    // until a message arrives the hands count as empty.
+    body_filter_holding_sub_ = create_subscription<std_msgs::msg::Bool>(
+        "body_filter/holding", rclcpp::QoS(1).reliable().transient_local(),
+        [this](const std_msgs::msg::Bool::ConstSharedPtr msg) {
+          if (msg->data != body_filter_->holding()) {
+            RCLCPP_INFO_STREAM(get_logger(),
+                               "Body filter: held capsules "
+                                   << (msg->data ? "on" : "off"));
+          }
+          body_filter_->setHolding(msg->data);
+        });
+  }
 }
 
 void NvbloxNode::advertiseTopics() {
@@ -974,11 +989,21 @@ void NvbloxNode::initializeBodyFilter(
   for (const std::string& link : body_filter_->links()) {
     links << " " << link;
   }
+  std::stringstream held;
+  for (const BodyCapsule& capsule : body_capsules) {
+    if (capsule.held) {
+      held << " " << capsule.name;
+    }
+  }
   RCLCPP_INFO_STREAM(get_logger(),
                      "Body filter on: " << body_capsules.size()
                                         << " capsules, margin "
                                         << params_.body_filter_margin_m.get()
-                                        << " m, links:" << links.str());
+                                        << " m, links:" << links.str()
+                                        << (held.str().empty()
+                                                ? ""
+                                                : "; only while holding:")
+                                        << held.str());
 }
 
 bool NvbloxNode::isBodyTfReady(const std::string& sensor_frame,
@@ -1060,7 +1085,12 @@ void NvbloxNode::logBodyFilterStatistics() {
     return;
   }
   std::stringstream line;
-  line << "Body filter, last second: ";
+  line << "Body filter, last second";
+  if (body_filter_->hasHeldCapsules()) {
+    line << " (held capsules " << (body_filter_->holding() ? "on" : "off")
+         << ")";
+  }
+  line << ": ";
   if (params_.use_depth) {
     line << statistics.depth_frames << " depth images, masked "
          << (statistics.depth_frames > 0
