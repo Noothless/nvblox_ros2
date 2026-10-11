@@ -159,9 +159,9 @@ TEST(BodyCapsuleParams, initialize) {
   EXPECT_FLOAT_EQ(capsules[0].radius, 0.06f);
   EXPECT_FALSE(capsules[0].held);
 
-  // Held capsules: filtered only while holding.
-  rclcpp::NodeOptions held_options;
-  held_options.parameter_overrides({
+  // Held capsules: filtered only while holding, with held_only_while_holding;
+  // without it, always.
+  std::vector<rclcpp::Parameter> held_params = {
       {"body_filter.capsules.names", std::vector<std::string>{"hand", "held"}},
       {"body_filter.capsules.hand.start_link", "wrist"},
       {"body_filter.capsules.hand.end_link", "palm"},
@@ -170,12 +170,23 @@ TEST(BodyCapsuleParams, initialize) {
       {"body_filter.capsules.held.end_link", "palm"},
       {"body_filter.capsules.held.radius", 0.05},
       {"body_filter.held_capsules", std::vector<std::string>{"held"}},
-    });
-  auto held_node = std::make_shared<rclcpp::Node>("held_node", held_options);
-  const std::vector<BodyCapsule> held = initializeBodyCapsuleParams(held_node.get());
-  ASSERT_EQ(held.size(), 2u);
-  EXPECT_FALSE(held[0].held);
-  EXPECT_TRUE(held[1].held);
+  };
+  rclcpp::NodeOptions always_options;
+  always_options.parameter_overrides(held_params);
+  auto always_node = std::make_shared<rclcpp::Node>("always_node", always_options);
+  const std::vector<BodyCapsule> always = initializeBodyCapsuleParams(always_node.get());
+  ASSERT_EQ(always.size(), 2u);
+  EXPECT_FALSE(always[0].held);
+  EXPECT_FALSE(always[1].held);
+
+  held_params.emplace_back("body_filter.held_only_while_holding", true);
+  rclcpp::NodeOptions gated_options;
+  gated_options.parameter_overrides(held_params);
+  auto gated_node = std::make_shared<rclcpp::Node>("gated_node", gated_options);
+  const std::vector<BodyCapsule> gated = initializeBodyCapsuleParams(gated_node.get());
+  ASSERT_EQ(gated.size(), 2u);
+  EXPECT_FALSE(gated[0].held);
+  EXPECT_TRUE(gated[1].held);
 }
 
 TEST(FuserNodeParams, initialize) {
