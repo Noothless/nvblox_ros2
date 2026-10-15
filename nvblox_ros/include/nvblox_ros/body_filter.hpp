@@ -86,6 +86,43 @@ __host__ __device__ inline bool isPointInAnyCapsule(
   return isPointInAnyCapsule(p, capsule_set.capsules, capsule_set.num_capsules);
 }
 
+/// A fixed region of the depth image, [u0, u1) x [v0, v1) in fractions of its
+/// width (u) and height (v), whose returns are dropped like the body's. For
+/// what is rigid on the robot in front of the camera and its stereo artifacts,
+/// which no capsule holds: on the G1, the chest ZED in the head D435's view and
+/// the D435's false returns in its shadow beside it (2026-10-15).
+struct PixelBox
+{
+  float u0;
+  float v0;
+  float u1;
+  float v1;
+};
+
+/// Most pixel boxes; they go to the GPU as a kernel argument, as the capsules.
+constexpr int kMaxPixelBoxes = 8;
+
+struct PixelBoxSet
+{
+  int num_boxes = 0;
+  PixelBox boxes[kMaxPixelBoxes];
+};
+
+/// True if the pixel's centre lies in any of the boxes.
+__host__ __device__ inline bool isPixelInAnyBox(
+  const int col, const int row, const int cols, const int rows, const PixelBoxSet & set)
+{
+  const float u = (col + 0.5f) / cols;
+  const float v = (row + 0.5f) / rows;
+  for (int i = 0; i < set.num_boxes; ++i) {
+    const PixelBox & b = set.boxes[i];
+    if (u >= b.u0 && u < b.u1 && v >= b.v0 && v < b.v1) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// One end of a body capsule: a point fixed to a link, in the link's axes.
 struct CapsuleEnd
 {
@@ -168,9 +205,15 @@ public:
   /// The capsules placed by the last setLinkPoses().
   const CapsuleSet & capsules() const {return capsules_;}
 
+  /// The depth image's fixed boxes (PixelBox), replacing any set before;
+  /// empty: none. CHECKs at most kMaxPixelBoxes, each within [0, 1] and not
+  /// empty.
+  void setDepthPixelBoxes(const std::vector<PixelBox> & boxes);
+  const PixelBoxSet & depthPixelBoxes() const {return pixel_boxes_;}
+
   /// Writes a mask of the pixels to integrate: image::kMaskedValue (active)
-  /// where the back-projected depth lies outside every capsule, and 0 on the
-  /// body. Pass it to Mapper::integrateDepth as a MaskedDepthImageConstView:
+  /// where the back-projected depth lies outside every capsule and the pixel
+  /// outside every depth pixel box, and 0 on the body. Pass it to Mapper::integrateDepth as a MaskedDepthImageConstView:
   /// an inactive pixel still clears the space in front of it, but adds no
   /// surface. The mask is resized to the image if needed, otherwise reused.
   /// Asynchronous on the filter's stream.
@@ -191,6 +234,7 @@ private:
   std::vector<BodyCapsule> held_objects_;
 
   CapsuleSet capsules_;
+  PixelBoxSet pixel_boxes_;
   unified_ptr<int> num_masked_device_;
   unified_ptr<int> num_masked_host_;
 };

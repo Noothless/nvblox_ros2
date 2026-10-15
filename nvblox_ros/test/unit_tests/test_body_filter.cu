@@ -196,6 +196,57 @@ TEST(BodyFilter, MasksTheCapsuleInADepthImage) {
   EXPECT_EQ(body_filter.numMaskedPixels(), 0);
 }
 
+TEST(BodyFilter, MasksDepthPixelBoxesWhateverTheDepth) {
+  // A wall 2 m away: no capsule near it, so only the box masks, the valid
+  // returns in the bottom quarter's middle half; a missing return stays.
+  constexpr int kRows = 48;
+  constexpr int kCols = 64;
+  const Camera camera(50.0f, 50.0f, 32.0f, 24.0f, kCols, kRows);
+  DepthImage depth_host(kRows, kCols, MemoryType::kHost);
+  for (int row = 0; row < kRows; ++row) {
+    for (int col = 0; col < kCols; ++col) {
+      depth_host(row, col) = 2.0f;
+    }
+  }
+  depth_host(40, 32) = 0.0f;
+  DepthImage depth(MemoryType::kDevice);
+  depth.copyFrom(depth_host);
+  const std::vector<BodyCapsule> model = {
+    {"far", {"link", Vector3f(0.0f, 0.0f, 10.0f)}, {"link", Vector3f(0.1f, 0.0f, 10.0f)}, 0.05f},
+  };
+  auto cuda_stream = std::make_shared<CudaStreamOwning>();
+  BodyFilter body_filter(model, 0.0f, cuda_stream);
+  body_filter.setLinkPoses({Transform::Identity()});
+  body_filter.setDepthPixelBoxes({PixelBox{0.25f, 0.75f, 0.75f, 1.0f}});
+
+  MonoImage mask(MemoryType::kDevice);
+  body_filter.maskDepthImage(depth, camera, &mask);
+  const int num_masked = body_filter.numMaskedPixels();
+  MonoImage mask_host(MemoryType::kHost);
+  mask_host.copyFrom(mask);
+  for (int row = 0; row < kRows; ++row) {
+    for (int col = 0; col < kCols; ++col) {
+      const bool in_box = row >= 36 && col >= 16 && col < 48 && !(row == 40 && col == 32);
+      EXPECT_EQ(mask_host(row, col), in_box ? 0 : image::kMaskedValue)
+        << "row " << row << " col " << col;
+    }
+  }
+  EXPECT_EQ(num_masked, 12 * 32 - 1);
+
+  // No boxes: nothing masked.
+  body_filter.setDepthPixelBoxes({});
+  body_filter.maskDepthImage(depth, camera, &mask);
+  EXPECT_EQ(body_filter.numMaskedPixels(), 0);
+}
+
+TEST(BodyFilterDeathTest, RefusesAnEmptyOrOutsidePixelBox) {
+  auto cuda_stream = std::make_shared<CudaStreamOwning>();
+  BodyFilter body_filter(
+    {{"c", {"link", Vector3f::Zero()}, {"link", Vector3f::Zero()}, 0.1f}}, 0.0f, cuda_stream);
+  EXPECT_DEATH(body_filter.setDepthPixelBoxes({PixelBox{0.5f, 0.0f, 0.5f, 1.0f}}), "");
+  EXPECT_DEATH(body_filter.setDepthPixelBoxes({PixelBox{0.0f, 0.0f, 1.0f, 1.1f}}), "");
+}
+
 sensor_msgs::msg::PointCloud2::SharedPtr makeCloud(const std::vector<Vector3f> & points)
 {
   auto cloud = std::make_shared<sensor_msgs::msg::PointCloud2>();

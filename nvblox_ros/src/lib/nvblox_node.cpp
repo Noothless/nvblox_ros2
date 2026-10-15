@@ -96,8 +96,28 @@ NvbloxNode::NvbloxNode(const rclcpp::NodeOptions& options,
   // Declared either way, so the body model can stay in the parameter files.
   const std::vector<BodyCapsule> body_capsules =
       initializeBodyCapsuleParams(this);
+  // [u0, v0, u1, v1, ...] in fractions of the depth image (PixelBox).
+  const auto pixel_boxes = declare_parameter<std::vector<double>>(
+      "body_filter.depth_pixel_boxes", std::vector<double>{});
   if (params_.body_filter_enable) {
     initializeBodyFilter(body_capsules);
+    CHECK_EQ(pixel_boxes.size() % 4, 0u)
+        << "body_filter.depth_pixel_boxes must be [u0, v0, u1, v1, ...]";
+    std::vector<PixelBox> boxes;
+    std::stringstream described;
+    for (size_t i = 0; i < pixel_boxes.size(); i += 4) {
+      boxes.push_back(PixelBox{static_cast<float>(pixel_boxes[i]),
+                               static_cast<float>(pixel_boxes[i + 1]),
+                               static_cast<float>(pixel_boxes[i + 2]),
+                               static_cast<float>(pixel_boxes[i + 3])});
+      described << " [" << pixel_boxes[i] << ", " << pixel_boxes[i + 1] << ", "
+                << pixel_boxes[i + 2] << ", " << pixel_boxes[i + 3] << "]";
+    }
+    body_filter_->setDepthPixelBoxes(boxes);
+    if (!boxes.empty()) {
+      RCLCPP_INFO_STREAM(get_logger(), "Body filter: depth pixel boxes (u0, v0, u1, v1):"
+                                           << described.str());
+    }
   }
 
   // Create callback groups, which allows processing to go in parallel with the

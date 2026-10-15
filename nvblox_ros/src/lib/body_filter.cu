@@ -133,6 +133,19 @@ int BodyFilter::numHeldObjects() const {
   return static_cast<int>(held_objects_.size());
 }
 
+void BodyFilter::setDepthPixelBoxes(const std::vector<PixelBox>& boxes) {
+  CHECK_LE(boxes.size(), static_cast<size_t>(kMaxPixelBoxes))
+      << "The body filter takes at most " << kMaxPixelBoxes << " depth pixel boxes";
+  pixel_boxes_.num_boxes = 0;
+  for (const PixelBox& b : boxes) {
+    CHECK(0.0f <= b.u0 && b.u0 < b.u1 && b.u1 <= 1.0f && 0.0f <= b.v0 &&
+          b.v0 < b.v1 && b.v1 <= 1.0f)
+        << "A depth pixel box needs 0 <= u0 < u1 <= 1 and 0 <= v0 < v1 <= 1, not ["
+        << b.u0 << ", " << b.v0 << ", " << b.u1 << ", " << b.v1 << "]";
+    pixel_boxes_.boxes[pixel_boxes_.num_boxes++] = b;
+  }
+}
+
 bool BodyFilter::hasHeldCapsules() const {
   return std::any_of(model_.begin(), model_.end(),
                      [](const BodyCapsule& capsule) { return capsule.held; });
@@ -143,6 +156,7 @@ namespace {
 __global__ void maskDepthImageKernel(const DepthImageConstView depth,
                                      const Camera camera,
                                      const CapsuleSet capsules,
+                                     const PixelBoxSet boxes,
                                      MonoImageView mask, int* num_masked) {
   const int col = blockIdx.x * blockDim.x + threadIdx.x;
   const int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -154,8 +168,11 @@ __global__ void maskDepthImageKernel(const DepthImageConstView depth,
   // integrator ignores them or treats them as it would without the filter.
   bool on_body = false;
   if (d > 0.0f && isfinite(d)) {
-    const Vector3f p_S = camera.unprojectFromPixelIndices(Index2D(col, row), d);
-    on_body = isPointInAnyCapsule(p_S, capsules);
+    on_body = isPixelInAnyBox(col, row, depth.cols(), depth.rows(), boxes);
+    if (!on_body) {
+      const Vector3f p_S = camera.unprojectFromPixelIndices(Index2D(col, row), d);
+      on_body = isPointInAnyCapsule(p_S, capsules);
+    }
   }
   mask(row, col) = on_body ? 0 : image::kMaskedValue;
   if (on_body) {
@@ -181,7 +198,7 @@ void BodyFilter::maskDepthImage(const DepthImage& depth_image,
   const dim3 blocks((depth_image.cols() + kThreadsPerDim - 1) / kThreadsPerDim,
                     (depth_image.rows() + kThreadsPerDim - 1) / kThreadsPerDim);
   maskDepthImageKernel<<<blocks, threads, 0, *cuda_stream_>>>(
-      DepthImageConstView(depth_image), camera, capsules_,
+      DepthImageConstView(depth_image), camera, capsules_, pixel_boxes_,
       MonoImageView(*mask), num_masked_device_.get());
   checkCudaErrors(cudaPeekAtLastError());
   num_masked_device_.copyToAsync(num_masked_host_, *cuda_stream_);
